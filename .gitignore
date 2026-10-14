@@ -1,0 +1,21 @@
+# Python 编译缓存
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 虚拟环境
+.venv/
+
+
+# Ruff 缓存 (截图中的 .ruff_cache)
+.ruff_cache/
+
+# 其他常见的 Python 工具缓存 (建议加上，防患于未然)
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 编辑器/系统文件 (可选，推荐)
+.vscode/
+
