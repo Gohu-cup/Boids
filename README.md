@@ -11,7 +11,9 @@
 ## 运行
 
 ```bash
-.venv/bin/python boids.py
+.venv/bin/python main.py
+# 或
+.venv/bin/python -m boids
 ```
 
 运行后打开 900×700 的窗口，50 个三角（Boid）随机散布，随时间逐渐形成同向飞行的群体，并可在边缘环绕。
@@ -110,13 +112,20 @@
 
 ## 代码结构
 
-- `Params`：全部可调参数；
-- `Boid`：单个个体的初始状态（位置、速度）；
-- `Obstacle`：圆形障碍物（位置 + 半径）；
-- `Predator`：捕食者群体（位置/速度数组，负责初始化）；
-- `Flock`：持有全体 `(N,2)` 位置/速度与种群数组，向量化计算规则、更新捕食者与捕食判定；
-- `Visualizer`：turtle 屏幕初始化、每帧渲染、键盘/鼠标交互与主循环；
-- `main()`：入口。
+代码按职责拆分为 `boids` 包（`main.py` 为顶层入口）：
+
+```
+boids/
+├── __init__.py   # 包导出（Params / Flock / Visualizer 等）
+├── __main__.py   # 支持 python -m boids 运行
+├── params.py     # Params：全部可调参数
+├── entities.py   # Boid / Obstacle / Predator 数据实体
+├── math_utils.py # 向量工具：坐标环绕、限长、逃离/避障转向力
+├── flock.py      # Flock：仿真核心（三规则 + 捕食者更新）
+└── visualizer.py # Visualizer：turtle 渲染与键盘/鼠标交互
+```
+
+依赖方向：`params` ← `entities` / `math_utils` ← `flock` ← `visualizer`，无循环依赖。
 
 ## 扩展方向
 
