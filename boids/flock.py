@@ -1,8 +1,8 @@
 """群体仿真核心。
 
-:class:`Flock` 持有全体 Boid 的位置/速度/种群数组，向量化计算
-分离、对齐、聚合三条规则，并处理避障、逃离捕食者、鼠标驱赶，
-以及捕食者追捕与捕食判定。
+:class:`Flock` 只负责 Boid 群体：持有位置/速度/种群数组，
+向量化计算分离、对齐、聚合三条规则，并叠加避障、逃离捕食者、
+鼠标驱赶三种外力。捕食者自身的追捕行为见 :mod:`boids.predator`。
 """
 
 from __future__ import annotations
@@ -11,9 +11,10 @@ import math
 
 import numpy as np
 
-from .entities import Boid, Predator
-from .math_utils import away_steering, limit_magnitude, obstacle_steering, wrap_coord
+from .entities import Obstacle
 from .params import Params
+from .steering import away_steering, obstacle_steering
+from .vecmath import EPS, EPS_DIST, limit_magnitude, wrap_coord
 
 
 class Flock:
@@ -27,21 +28,16 @@ class Flock:
 
     # -- 初始化 ------------------------------------------------------------
     def _random_state(self):
-        """生成随机初始位置与速度。"""
+        """生成随机初始位置与速度（位置在窗口内，速度方向随机）。"""
         p = self.params
         half_w, half_h = p.width / 2.0, p.height / 2.0
-        boids = []
-        for _ in range(p.num_boids):
-            # 位置：窗口内随机
-            position = self.rng.uniform([-half_w, -half_h], [half_w, half_h])
-            # 速度：随机方向，大小为最大速度的一半
-            angle = self.rng.uniform(0.0, 2.0 * math.pi)
-            velocity = (p.max_speed / 2.0) * np.array(
-                [math.cos(angle), math.sin(angle)]
-            )
-            boids.append(Boid(position=position, velocity=velocity))
-        positions = np.array([b.position for b in boids], dtype=float)
-        velocities = np.array([b.velocity for b in boids], dtype=float)
+        positions = self.rng.uniform(
+            [-half_w, -half_h], [half_w, half_h], size=(p.num_boids, 2)
+        )
+        angles = self.rng.uniform(0.0, 2.0 * math.pi, size=p.num_boids)
+        velocities = (p.max_speed / 2.0) * np.stack(
+            [np.cos(angles), np.sin(angles)], axis=1
+        )
         return positions, velocities
 
     def reset(self):
@@ -55,97 +51,34 @@ class Flock:
         else:
             self.species = np.zeros(self.params.num_boids, dtype=int)
 
-    def _respawn(self, i: int):
-        """把被吃掉的 Boid 重置到随机位置与速度（种群不变）。"""
+    def respawn(self, indices):
+        """把指定索引的 Boid 重置到随机位置与速度（种群不变）。"""
+        idx = np.atleast_1d(indices)
+        if idx.size == 0:
+            return
         p = self.params
         half_w, half_h = p.width / 2.0, p.height / 2.0
-        self.positions[i] = self.rng.uniform([-half_w, -half_h], [half_w, half_h])
-        angle = self.rng.uniform(0.0, 2.0 * math.pi)
-        self.velocities[i] = (p.max_speed / 2.0) * np.array(
-            [math.cos(angle), math.sin(angle)]
+        self.positions[idx] = self.rng.uniform(
+            [-half_w, -half_h], [half_w, half_h], size=(idx.size, 2)
         )
-
-    # -- 捕食者更新 --------------------------------------------------------
-    def _update_predators(
-        self, predators: Predator, obstacles: list, obstacles_enabled: bool
-    ) -> int:
-        """更新捕食者：追最近 Boid、彼此分离、避障、捕食判定。返回捕食数。"""
-        p = self.params
-        k = predators.positions.shape[0]
-        eaten = 0
-        for j in range(k):
-            acc = np.zeros(2)
-
-            # 追最近的 Boid
-            to_boids = self.positions - predators.positions[j]
-            to_boids[:, 0] = wrap_coord(to_boids[:, 0], p.width)
-            to_boids[:, 1] = wrap_coord(to_boids[:, 1], p.height)
-            bd = np.linalg.norm(to_boids, axis=1)
-            if bd.size:
-                i_min = int(np.argmin(bd))
-                if bd[i_min] > 1e-9:
-                    desired = to_boids[i_min] / bd[i_min] * p.predator_speed
-                    acc += desired - predators.velocities[j]
-
-            # 捕食者之间分离
-            if k > 1:
-                other = np.ones(k, dtype=bool)
-                other[j] = False
-                acc += away_steering(
-                    predators.positions[j],
-                    predators.velocities[j],
-                    predators.positions[other],
-                    p.separation_radius,
-                    p.w_separation,
-                    p.predator_speed,
-                    p,
-                )
-
-            # 避障
-            if obstacles_enabled and obstacles:
-                acc += obstacle_steering(
-                    predators.positions[j],
-                    predators.velocities[j],
-                    obstacles,
-                    p,
-                    p.predator_speed,
-                )
-
-            # 更新速度与位置
-            predators.velocities[j] = limit_magnitude(
-                predators.velocities[j] + limit_magnitude(acc, p.max_force),
-                p.predator_speed,
-            )
-            predators.positions[j] = (
-                predators.positions[j] + predators.velocities[j]
-            )
-            predators.positions[j, 0] = wrap_coord(
-                predators.positions[j, 0], p.width
-            )
-            predators.positions[j, 1] = wrap_coord(
-                predators.positions[j, 1], p.height
-            )
-
-            # 捕食判定：追上即吃掉（重生）
-            to_boids = self.positions - predators.positions[j]
-            to_boids[:, 0] = wrap_coord(to_boids[:, 0], p.width)
-            to_boids[:, 1] = wrap_coord(to_boids[:, 1], p.height)
-            bd = np.linalg.norm(to_boids, axis=1)
-            if bd.size and bd.min() < p.catch_radius:
-                self._respawn(int(np.argmin(bd)))
-                eaten += 1
-        return eaten
+        angles = self.rng.uniform(0.0, 2.0 * math.pi, size=idx.size)
+        self.velocities[idx] = (p.max_speed / 2.0) * np.stack(
+            [np.cos(angles), np.sin(angles)], axis=1
+        )
 
     # -- 规则计算 ----------------------------------------------------------
     def step(
         self,
-        obstacles: list,
-        predators: Predator,
+        obstacles: list[Obstacle],
+        predator_positions: np.ndarray | None,
         mouse_pos: np.ndarray | None,
-        obstacles_enabled: bool = True,
-        predators_enabled: bool = True,
-    ) -> int:
-        """推进一帧：计算合力 → 更新速度/位置 → 更新捕食者。返回本帧捕食数。"""
+    ) -> None:
+        """推进 Boid 一帧：计算合力 → 更新速度/位置。
+
+        - ``obstacles``：空列表表示无障碍；
+        - ``predator_positions``：None 表示无捕食者；
+        - ``mouse_pos``：None 表示无鼠标驱赶。
+        """
         p = self.params
         pos = self.positions
         vel = self.velocities
@@ -170,33 +103,33 @@ class Flock:
             if nearby[i].any():
                 d = dist[i, nearby[i]]
                 away = -diff[i, nearby[i]]
-                unit = away / np.maximum(d[:, None], 1e-9)
-                w = 1.0 / np.maximum(d, 1e-6)
+                unit = away / np.maximum(d[:, None], EPS)
+                w = 1.0 / np.maximum(d, EPS_DIST)
                 direction = (unit * w[:, None]).sum(axis=0)
-                direction = direction / (np.linalg.norm(direction) + 1e-9)
+                direction = direction / (np.linalg.norm(direction) + EPS)
                 acc += p.w_separation * (direction * p.max_speed - vel[i])
 
             # 对齐 / 聚合：仅同种群
             if flock_neighbor[i].any():
                 avg_vel = vel[flock_neighbor[i]].mean(axis=0)
                 sp = np.linalg.norm(avg_vel)
-                if sp > 1e-9:
+                if sp > EPS:
                     acc += p.w_alignment * (avg_vel / sp * p.max_speed - vel[i])
 
                 center = diff[i, flock_neighbor[i]].mean(axis=0)
                 dc = np.linalg.norm(center)
-                if dc > 1e-9:
+                if dc > EPS:
                     acc += p.w_cohesion * (center / dc * p.max_speed - vel[i])
 
             # 逃离捕食者
-            if predators_enabled and predators.positions.size:
+            if predator_positions is not None and predator_positions.size:
                 acc += away_steering(
-                    pos[i], vel[i], predators.positions,
+                    pos[i], vel[i], predator_positions,
                     p.fear_radius, p.w_flee, p.max_speed, p,
                 )
 
             # 避障
-            if obstacles_enabled and obstacles:
+            if obstacles:
                 acc += obstacle_steering(
                     pos[i], vel[i], obstacles, p, p.max_speed
                 )
@@ -221,8 +154,3 @@ class Flock:
 
         self.velocities = vel
         self.positions = pos
-
-        # 捕食者更新
-        if predators_enabled and predators.positions.size:
-            return self._update_predators(predators, obstacles, obstacles_enabled)
-        return 0

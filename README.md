@@ -116,16 +116,31 @@
 
 ```
 boids/
-├── __init__.py   # 包导出（Params / Flock / Visualizer 等）
+├── __init__.py   # 包导出（Params / Simulation / Visualizer 等）
 ├── __main__.py   # 支持 python -m boids 运行
 ├── params.py     # Params：全部可调参数
-├── entities.py   # Boid / Obstacle / Predator 数据实体
-├── math_utils.py # 向量工具：坐标环绕、限长、逃离/避障转向力
-├── flock.py      # Flock：仿真核心（三规则 + 捕食者更新）
-└── visualizer.py # Visualizer：turtle 渲染与键盘/鼠标交互
+├── entities.py   # Obstacle：纯数据实体
+├── vecmath.py    # 纯向量工具：坐标环绕、限长
+├── steering.py   # Reynolds 转向力：逃离 / 避障
+├── flock.py      # Flock：Boid 群体三规则 + 外力
+├── predator.py   # Predator：追捕与捕食行为
+├── simulation.py # Simulation：世界门面（统一协调与开关）
+└── visualizer.py # Visualizer：turtle 渲染与交互
 ```
 
-依赖方向：`params` ← `entities` / `math_utils` ← `flock` ← `visualizer`，无循环依赖。
+依赖方向：`params` ← `entities` / `vecmath` ← `steering` ← `flock` / `predator` ← `simulation` ← `visualizer`，无循环依赖。
+
+**分层要点**：
+
+- `flock` 与 `predator` 不依赖 `turtle`，可无窗口单元测试（见 `tests/`）；
+- 渲染层只通过 `Simulation` 门面的小接口读写状态、下发指令，不直接操作内部对象；
+- 捕食者拥有自身行为（`Predator.step`），与 `Flock` 仅通过 `respawn` 协作。
+
+## 测试
+
+```bash
+.venv/bin/python -m unittest discover -s tests -v
+```
 
 ## 扩展方向
 

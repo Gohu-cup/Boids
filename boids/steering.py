@@ -1,7 +1,7 @@
-"""向量与转向力计算工具。
+"""Reynolds 转向力计算。
 
-供 :mod:`boids.flock` 使用，包含环形坐标环绕、向量长度限制，
-以及「逃离一组点」和「避让障碍物」两种通用转向力。
+依赖 :mod:`boids.vecmath` 与 :class:`~boids.params.Params`，
+提供「逃离一组点」和「避让障碍物」两种通用转向力。
 """
 
 from __future__ import annotations
@@ -9,18 +9,7 @@ from __future__ import annotations
 import numpy as np
 
 from .params import Params
-
-
-def wrap_coord(value: np.ndarray, size: float) -> np.ndarray:
-    """把坐标环绕到 [-size/2, size/2] 区间（环形边界）。"""
-    return (value + size / 2.0) % size - size / 2.0
-
-
-def limit_magnitude(vector: np.ndarray, max_norm: float) -> np.ndarray:
-    """把向量长度限制在 max_norm 以内（按最后一维缩放）。"""
-    norm = np.linalg.norm(vector, axis=-1, keepdims=True)
-    scale = np.minimum(1.0, max_norm / np.maximum(norm, 1e-9))
-    return vector * scale
+from .vecmath import EPS, EPS_DIST, wrap_coord
 
 
 def away_steering(
@@ -44,10 +33,10 @@ def away_steering(
         return np.zeros(2)
     d = d[close]
     away = -d_vec[close]
-    unit = away / np.maximum(d[:, None], 1e-9)
-    w = 1.0 / np.maximum(d, 1e-6)
+    unit = away / np.maximum(d[:, None], EPS)
+    w = 1.0 / np.maximum(d, EPS_DIST)
     direction = (unit * w[:, None]).sum(axis=0)
-    direction = direction / (np.linalg.norm(direction) + 1e-9)
+    direction = direction / (np.linalg.norm(direction) + EPS)
     return weight * (direction * speed - velocity)
 
 
@@ -66,7 +55,7 @@ def obstacle_steering(
         d_vec[1] = wrap_coord(d_vec[1], params.height)
         d = np.linalg.norm(d_vec)
         avoid_r = ob.radius + params.obstacle_margin
-        if 1e-9 < d < avoid_r:
+        if EPS < d < avoid_r:
             away = -d_vec / d
             strength = (avoid_r - d) / avoid_r   # 越近越强
             steer += params.w_obstacle * (away * speed - velocity) * strength

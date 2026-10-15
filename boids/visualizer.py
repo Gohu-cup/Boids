@@ -1,7 +1,7 @@
 """turtle 可视化层。
 
-:class:`Visualizer` 负责屏幕初始化、每帧渲染、键盘/鼠标交互与主循环，
-并把 :class:`~boids.flock.Flock` 的仿真状态同步到 turtle 图形上。
+:class:`Visualizer` 只负责渲染与交互：通过 :class:`~boids.simulation.Simulation`
+的门面接口读取状态、下发指令，并把视觉同步（障碍物显隐、颜色等）保持在本层。
 """
 
 from __future__ import annotations
@@ -11,45 +11,34 @@ import turtle
 
 import numpy as np
 
-from .entities import Obstacle, Predator
-from .flock import Flock
 from .params import Params
+from .simulation import Simulation
 
 
 class Visualizer:
     """turtle 可视化：屏幕初始化、每帧渲染、键盘与鼠标交互、主循环。"""
 
-    def __init__(self, params: Params):
-        self.params = params
-        self.rng = np.random.default_rng()
-        self.flock = Flock(params, self.rng)
-        self.predators = Predator(params, self.rng)
+    def __init__(self, params: Params | None = None):
+        self.params = params if params is not None else Params()
+        self.simulation = Simulation(self.params)
         self.paused = False
-        self.obstacles_enabled = True
-        self.predators_enabled = False
-        self.multi_species = True
         self.mouse_pos = None
-        self.eaten_total = 0
 
-        half_w, half_h = params.width / 2.0, params.height / 2.0
+        half_w, half_h = self.params.width / 2.0, self.params.height / 2.0
         self.screen = turtle.Screen()
-        self.screen.setup(params.width, params.height)
+        self.screen.setup(self.params.width, self.params.height)
         self.screen.setworldcoordinates(-half_w, -half_h, half_w, half_h)
-        self.screen.bgcolor(params.bg_color)
+        self.screen.bgcolor(self.params.bg_color)
         self.screen.title("Boids 群体行为仿真")
         self.screen.tracer(0)  # 关闭自动刷新，手动 update 避免闪烁
 
         # Boid、捕食者、障碍物、状态栏
-        self.turtles = [self._make_boid_turtle() for _ in range(params.num_boids)]
+        self.turtles = [self._make_boid_turtle() for _ in range(self.params.num_boids)]
         self.predator_turtles = [
-            self._make_predator_turtle() for _ in range(params.num_predators)
-        ]
-        self.obstacles = [
-            Obstacle(np.array(pos, dtype=float), params.obstacle_radius)
-            for pos in params.preset_obstacles
+            self._make_predator_turtle() for _ in range(self.params.num_predators)
         ]
         self.obstacle_turtles = [
-            self._make_obstacle_turtle(ob) for ob in self.obstacles
+            self._make_obstacle_turtle(ob) for ob in self.simulation.obstacles
         ]
         self.status = self._make_status_turtle()
 
@@ -142,85 +131,80 @@ class Visualizer:
         self.mouse_pos = None
 
     def _on_left_click(self, x, y):
-        if self.obstacles_enabled:
+        if self.simulation.obstacles_enabled:
             self.add_obstacle(x, y)
 
     def _on_right_click(self, x, y):
-        if self.obstacles_enabled:
+        if self.simulation.obstacles_enabled:
             self.remove_obstacle(x, y)
 
     def add_obstacle(self, x: float, y: float):
-        ob = Obstacle(np.array([x, y], dtype=float), self.params.obstacle_radius)
-        self.obstacles.append(ob)
-        self.obstacle_turtles.append(self._make_obstacle_turtle(ob))
+        self.simulation.add_obstacle(x, y)
+        self.obstacle_turtles.append(
+            self._make_obstacle_turtle(self.simulation.obstacles[-1])
+        )
 
     def remove_obstacle(self, x: float, y: float):
-        if not self.obstacles:
-            return
-        pts = np.array([o.position for o in self.obstacles])
-        d = np.linalg.norm(pts - np.array([x, y]), axis=1)
-        i = int(np.argmin(d))
-        self.obstacle_turtles[i].clear()
-        del self.obstacles[i]
-        del self.obstacle_turtles[i]
+        i = self.simulation.remove_obstacle(x, y)
+        if i is not None:
+            self.obstacle_turtles[i].clear()
+            del self.obstacle_turtles[i]
 
-    # -- 开关回调 ----------------------------------------------------------
+    # -- 开关回调（委托给 Simulation + 视觉同步） --------------------------
     def toggle_pause(self):
         self.paused = not self.paused
 
     def change_speed(self, delta: float):
-        self.params.max_speed = max(0.5, self.params.max_speed + delta)
+        self.simulation.change_speed(delta)
 
     def toggle_obstacles(self):
-        self.obstacles_enabled = not self.obstacles_enabled
+        self.simulation.toggle_obstacles()
         self._sync_obstacles()
 
     def toggle_predators(self):
-        self.predators_enabled = not self.predators_enabled
+        self.simulation.toggle_predators()
         self._sync_predators()
 
     def toggle_multi_species(self):
-        self.multi_species = not self.multi_species
-        self.flock.set_multi_species(self.multi_species)
+        self.simulation.toggle_multi_species()
         self._sync_species_colors()
 
     def reset(self):
-        self.flock.reset()
-        self.predators.reset()
-        self.eaten_total = 0
+        self.simulation.reset()
 
     # -- 显示同步 ----------------------------------------------------------
     def _sync_species_colors(self):
         colors = self.params.species_colors
-        for t, s in zip(self.turtles, self.flock.species):
-            if self.multi_species:
+        for t, s in zip(self.turtles, self.simulation.boid_species):
+            if self.simulation.multi_species:
                 t.color(colors[s % len(colors)])
             else:
                 t.color(self.params.boid_color)
 
     def _sync_predators(self):
         for t in self.predator_turtles:
-            if self.predators_enabled:
+            if self.simulation.predators_enabled:
                 t.showturtle()
             else:
                 t.hideturtle()
 
     def _sync_obstacles(self):
-        for t, ob in zip(self.obstacle_turtles, self.obstacles):
-            if self.obstacles_enabled:
+        for t, ob in zip(self.obstacle_turtles, self.simulation.obstacles):
+            if self.simulation.obstacles_enabled:
                 self._draw_obstacle(t, ob)
             else:
                 t.clear()
 
     # -- 渲染 --------------------------------------------------------------
     def _render(self):
+        sim = self.simulation
         for t, (x, y), (vx, vy) in zip(
-            self.turtles, self.flock.positions, self.flock.velocities
+            self.turtles, sim.boid_positions, sim.boid_velocities
         ):
             t.goto(x, y)
             t.setheading(math.degrees(math.atan2(vy, vx)))
         for t, (x, y), (vx, vy) in zip(
-            self.predator_turtles, self.predators.positions, self.predators.velocities
+            self.predator_turtles, sim.predator_positions, sim.predator_velocities
         ):
             t.goto(x, y)
             t.setheading(math.degrees(math.atan2(vy, vx)))
@@ -228,14 +212,15 @@ class Visualizer:
         self.screen.update()
 
     def _update_status(self):
+        sim = self.simulation
         state = "暂停" if self.paused else "运行"
-        obs = "开" if self.obstacles_enabled else "关"
-        pre = "开" if self.predators_enabled else "关"
-        mul = "开" if self.multi_species else "关"
+        obs = "开" if sim.obstacles_enabled else "关"
+        pre = "开" if sim.predators_enabled else "关"
+        mul = "开" if sim.multi_species else "关"
         self.status.clear()
         self.status.write(
             f"{state} | 速度:{self.params.max_speed:.1f} | "
-            f"O障碍[{obs}] P捕食[{pre}] M多群[{mul}] | 捕食:{self.eaten_total} | "
+            f"O障碍[{obs}] P捕食[{pre}] M多群[{mul}] | 捕食:{sim.eaten_total} | "
             "空格暂停 ↑↓变速 R重置",
             font=("Arial", 11, "normal"),
         )
@@ -244,13 +229,7 @@ class Visualizer:
     def run(self):
         def loop():
             if not self.paused:
-                self.eaten_total += self.flock.step(
-                    obstacles=self.obstacles,
-                    predators=self.predators,
-                    mouse_pos=self.mouse_pos,
-                    obstacles_enabled=self.obstacles_enabled,
-                    predators_enabled=self.predators_enabled,
-                )
+                self.simulation.step(self.mouse_pos)
             self._render()  # 暂停时也刷新状态栏
             self.screen.ontimer(loop, self.params.frame_ms)
 
@@ -260,5 +239,5 @@ class Visualizer:
 
 def main():
     """程序入口：以默认参数启动仿真。"""
-    viz = Visualizer(Params())
+    viz = Visualizer()
     viz.run()

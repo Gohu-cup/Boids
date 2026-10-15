@@ -5,23 +5,28 @@
 
 模块划分：
 - params      : 参数配置
-- entities    : 数据实体（Boid / Obstacle / Predator）
-- math_utils  : 向量与转向力工具
-- flock       : 群体仿真核心
-- visualizer  : turtle 可视化与交互
+- entities    : 纯数据实体（Obstacle）
+- vecmath     : 纯向量几何工具
+- steering    : Reynolds 转向力
+- flock       : Boid 群体规则
+- predator    : 捕食者追捕行为
+- simulation  : 世界门面（统一协调与开关状态）
+- visualizer  : turtle 渲染与交互
 """
 
-from .entities import Boid, Obstacle, Predator
+from .entities import Obstacle
 from .flock import Flock
 from .params import Params
+from .predator import Predator
+from .simulation import Simulation
 from .visualizer import Visualizer, main
 
 __all__ = [
-    "Boid",
     "Flock",
     "Obstacle",
     "Params",
     "Predator",
+    "Simulation",
     "Visualizer",
     "main",
 ]
